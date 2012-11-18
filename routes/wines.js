@@ -1,95 +1,53 @@
-var mongo = require('mongodb');
+var ORM = require('thin-orm'),
+    sqlite3 = require('sqlite3').verbose(),
+    db = new sqlite3.Database(':memory:'),
+    async = require('async');
 
-var Server = mongo.Server,
-    Db = mongo.Db,
-    BSON = mongo.BSONPure;
+ORM.table('wines')
+   .columns(['id', 'name', 'year', 'grapes', 'country', 'region', 'description', 'picture']);
+var driver = ORM.createDriver('sqlite', { db: db });
+var winesClient = ORM.createClient(driver, 'wines');
 
-var server = new Server('localhost', 27017, {auto_reconnect: true});
-db = new Db('winedb', server, {safe: true});
-
-db.open(function(err, db) {
-    if(!err) {
-        console.log("Connected to 'winedb' database");
-        db.collection('wines', {safe:true}, function(err, collection) {
-            if (err) {
-                console.log("The 'wines' collection doesn't exist. Creating it with sample data...");
-                populateDB();
-            }
-        });
-    }
-});
+populateDB();
 
 exports.findById = function(req, res) {
-    var id = req.params.id;
-    console.log('Retrieving wine: ' + id);
-    db.collection('wines', function(err, collection) {
-        collection.findOne({'_id':new BSON.ObjectID(id)}, function(err, item) {
-            res.send(item);
-        });
-    });
+    console.log('Retrieving wine: ' + req.params.id);
+
+    winesClient.findById(req.params.id, res);
 };
 
 exports.findAll = function(req, res) {
-    db.collection('wines', function(err, collection) {
-        collection.find().toArray(function(err, items) {
-            res.send(items);
-        });
-    });
+    winesClient.findMany({}, res);
 };
 
 exports.addWine = function(req, res) {
     var wine = req.body;
     console.log('Adding wine: ' + JSON.stringify(wine));
-    db.collection('wines', function(err, collection) {
-        collection.insert(wine, {safe:true}, function(err, result) {
-            if (err) {
-                res.send({'error':'An error has occurred'});
-            } else {
-                console.log('Success: ' + JSON.stringify(result[0]));
-                res.send(result[0]);
-            }
-        });
-    });
-}
+
+    winesClient.create({ data: wine }, res);
+};
 
 exports.updateWine = function(req, res) {
     var id = req.params.id;
     var wine = req.body;
-    delete wine._id;
     console.log('Updating wine: ' + id);
     console.log(JSON.stringify(wine));
-    db.collection('wines', function(err, collection) {
-        collection.update({'_id':new BSON.ObjectID(id)}, wine, {safe:true}, function(err, result) {
-            if (err) {
-                console.log('Error updating wine: ' + err);
-                res.send({'error':'An error has occurred'});
-            } else {
-                console.log('' + result + ' document(s) updated');
-                res.send(wine);
-            }
-        });
-    });
-}
+
+    winesClient.update({ criteria: { id: id }, data: wine}, res);
+};
 
 exports.deleteWine = function(req, res) {
     var id = req.params.id;
     console.log('Deleting wine: ' + id);
-    db.collection('wines', function(err, collection) {
-        collection.remove({'_id':new BSON.ObjectID(id)}, {safe:true}, function(err, result) {
-            if (err) {
-                res.send({'error':'An error has occurred - ' + err});
-            } else {
-                console.log('' + result + ' document(s) deleted');
-                res.send(req.body);
-            }
-        });
-    });
-}
 
-/*--------------------------------------------------------------------------------------------------------------------*/
-// Populate database with sample data -- Only used once: the first time the application is started.
-// You'd typically not find this code in a real-life app, since the database would already exist.
-var populateDB = function() {
+    winesClient.remove(id, res);
+};
+
+/*
+ * Populate database with sample data -- since we are using an in-memory database, we need to run this
+ * every time we start up.
+ */
+function populateDB() {
 
     var wines = [
     {
@@ -309,8 +267,22 @@ var populateDB = function() {
         picture: "waterbrook.jpg"
     }];
 
-    db.collection('wines', function(err, collection) {
-        collection.insert(wines, {safe:true}, function(err, result) {});
-    });
-
-};
+    db.run("create table wines (id INTEGER PRIMARY KEY, "
+         + "                    name VARCHAR(255), "
+         + "                    year INTEGER, "
+         + "                    grapes VARCHAR(255), "
+         + "                    country VARCHAR(255), "
+         + "                    region VARCHAR(255), "
+         + "                    description VARCHAR(65535), "
+         + "                    picture VARCHAR(255))",
+        function(err, result) {
+            if (err) {
+                console.log(err);
+                return;
+            }
+            async.forEachSeries(wines, function(wine, callback) {
+                winesClient.create({ data: wine }, callback);
+            });
+        }
+    );
+}
